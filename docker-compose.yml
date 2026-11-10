@@ -1,0 +1,44 @@
+# One application service ("app") + its single PostgreSQL database ("db").
+# Secrets live in .env; everything else is configured in code.
+services:
+  app:
+    build: .
+    env_file: .env
+    volumes:
+      - telethon-data:/data          # Telegram login session (keep it!)
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: finance
+      POSTGRES_USER: finance
+      POSTGRES_PASSWORD: finance     # not exposed outside the docker network
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U finance -d finance"]
+      interval: 5s
+      retries: 10
+    restart: unless-stopped
+
+
+  # OPTIONAL: public HTTPS URL for the Telegram Mini App (Menu button -> Analytics).
+  # Off by default. Start with:  docker compose --profile tunnel up -d
+  # The app discovers the tunnel URL automatically. Quick tunnels change URL on restart.
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    profiles: ["tunnel"]
+    command: tunnel --no-autoupdate --metrics 0.0.0.0:2000 --url http://app:8000
+    depends_on:
+      - app
+    restart: unless-stopped
+
+volumes:
+  telethon-data:
+  pg-data:

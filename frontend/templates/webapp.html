@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+  <title>Finance</title>
+  <link rel="stylesheet" href="/static/css/webapp.css?v=10">
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <script src="/static/js/webapp.js?v=10" defer></script>
+</head>
+<body data-currency="{{ currency }}">
+  <!-- Period + date navigation (Overview and Transactions) -->
+  <header class="top" id="top">
+    <div class="periods" id="periods" role="tablist" aria-label="Period">
+      <button data-period="day" role="tab" class="on">Day</button>
+      <button data-period="week" role="tab">Week</button>
+      <button data-period="month" role="tab">Month</button>
+      <button data-period="year" role="tab">Year</button>
+    </div>
+    <div class="datebar">
+      <button class="arrow" id="prev" aria-label="Previous">‹</button>
+      <button class="date-label" id="date-label" aria-label="Choose date">—</button>
+      <button class="arrow" id="next" aria-label="Next">›</button>
+      <input type="date" id="pick-date" class="picker" tabindex="-1" aria-hidden="true">
+      <input type="month" id="pick-month" class="picker" tabindex="-1" aria-hidden="true">
+    </div>
+  </header>
+
+  <div id="error" class="notice" hidden></div>
+
+  <!-- OVERVIEW -->
+  <main id="view-overview" class="view">
+    <section class="hero">
+      <span class="hero-label">Balance</span>
+      <span class="hero-value" id="balance">—</span>
+      <div class="chips" id="cards"></div>
+    </section>
+
+    <section class="duo">
+      <div class="tile">
+        <span class="tile-label">Income</span>
+        <span class="tile-value in" id="income">—</span>
+      </div>
+      <div class="tile">
+        <span class="tile-label">Spent</span>
+        <span class="tile-value out" id="spent">—</span>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Spent by category</h2>
+      <ul class="cats" id="cats"></ul>
+    </section>
+  </main>
+
+  <!-- TRANSACTIONS -->
+  <main id="view-transactions" class="view" hidden>
+    <p class="summary-line" id="tx-summary"></p>
+    <div id="tx-list"></div>
+    <button class="more" id="tx-more" hidden>Show more</button>
+  </main>
+
+  <!-- DEBTS -->
+  <main id="view-debts" class="view" hidden>
+    <section class="duo">
+      <div class="tile"><span class="tile-label">Owed to me</span><span class="tile-value in" id="d-owed">—</span></div>
+      <div class="tile"><span class="tile-label">I owe</span><span class="tile-value out" id="d-owe">—</span></div>
+    </section>
+    <p class="summary-line" id="d-net"></p>
+    <section class="card">
+      <h2>People</h2>
+      <ul class="people" id="people"></ul>
+    </section>
+    <p class="hint">Add or repay debts by writing or sending a voice message to the bot.</p>
+  </main>
+
+  <!-- Bottom navigation -->
+  <nav class="tabbar" id="tabbar">
+    <button data-view="overview" class="on"><span>📊</span>Overview</button>
+    <button data-view="transactions"><span>📋</span>Transactions</button>
+    <button data-view="debts"><span>🤝</span>Debts</button>
+  </nav>
+</body>
+</html>

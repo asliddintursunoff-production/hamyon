@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Personal Finance</title>
+  <link rel="stylesheet" href="/static/css/app.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js" defer></script>
+  <script src="/static/js/app.js" defer></script>
+</head>
+<body data-currency="{{ currency }}">
+<header class="topbar">
+  <h1>💰 Personal Finance</h1>
+  <nav class="tabs" role="tablist">
+    <button class="tab active" data-tab="overview" role="tab">Overview</button>
+    <button class="tab" data-tab="transactions" role="tab">Transactions</button>
+    <button class="tab" data-tab="debts" role="tab">Debts</button>
+  </nav>
+  <div class="topbar-actions">
+    <button id="refresh-balances" class="btn">🔄 Refresh balances</button>
+    <form method="post" action="/logout"><button class="btn ghost" type="submit">Log out</button></form>
+  </div>
+</header>
+
+<section class="filters" aria-label="Filters">
+  <select id="f-period" aria-label="Period">
+    <option value="today">Today</option>
+    <option value="week">This week</option>
+    <option value="month" selected>This month</option>
+    <option value="last_month">Last month</option>
+    <option value="year">This year</option>
+    <option value="custom">Custom range</option>
+  </select>
+  <span id="custom-range" hidden>
+    <input type="date" id="f-start" aria-label="Start date"> – <input type="date" id="f-end" aria-label="End date">
+  </span>
+  <select id="f-card" aria-label="Card"><option value="">All cards</option></select>
+  <select id="f-type" aria-label="Type">
+    <option value="">All types</option>
+    <option value="expense">Expense</option>
+    <option value="income">Income</option>
+    <option value="transfer">Transfer</option>
+    <option value="refund">Refund</option>
+    <option value="cash_withdrawal">Cash withdrawal</option>
+    <option value="other">Other</option>
+  </select>
+  <select id="f-category" aria-label="Category"><option value="">All categories</option></select>
+  <span id="status" class="muted" role="status"></span>
+</section>
+
+<main>
+  <!-- OVERVIEW -->
+  <section id="tab-overview" class="tab-panel">
+    <div class="kpis" id="kpis"></div>
+    <h2>Cards</h2>
+    <div class="cards" id="cards"></div>
+
+    <div class="grid">
+      <article class="panel"><h3>Expenses by category</h3><div class="chart-box"><canvas id="ch-category"></canvas></div></article>
+      <article class="panel"><h3>Daily spending</h3><div class="chart-box"><canvas id="ch-daily"></canvas></div></article>
+      <article class="panel"><h3>Income vs expenses by month</h3><div class="chart-box"><canvas id="ch-monthly"></canvas></div></article>
+      <article class="panel"><h3>Spending by card</h3><div class="chart-box"><canvas id="ch-cards"></canvas></div></article>
+      <article class="panel"><h3>Top merchants</h3><div class="chart-box"><canvas id="ch-merchants"></canvas></div></article>
+      <article class="panel"><h3>Largest expenses</h3><table class="table compact" id="largest"></table></article>
+      <article class="panel wide"><h3>By subcategory</h3><table class="table compact" id="subcategories"></table></article>
+    </div>
+  </section>
+
+  <!-- TRANSACTIONS -->
+  <section id="tab-transactions" class="tab-panel" hidden>
+    <div class="toolbar">
+      <input type="search" id="tx-search" placeholder="Search merchant or description" aria-label="Search">
+      <label><input type="checkbox" id="tx-review"> Needs review only</label>
+    </div>
+    <div class="table-wrap">
+      <table class="table" id="tx-table">
+        <thead>
+          <tr>
+            <th data-sort="datetime" class="sortable">Date ▾</th>
+            <th data-sort="merchant" class="sortable">Merchant</th>
+            <th data-sort="amount" class="sortable num">Amount</th>
+            <th data-sort="type" class="sortable">Type</th>
+            <th>Category</th>
+            <th>Card</th>
+            <th>AI / review</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <div class="pager"><button class="btn" id="tx-prev">‹ Prev</button><span id="tx-page"></span><button class="btn" id="tx-next">Next ›</button></div>
+  </section>
+
+  <!-- DEBTS -->
+  <section id="tab-debts" class="tab-panel" hidden>
+    <div class="kpis" id="debt-kpis"></div>
+    <div class="grid">
+      <article class="panel"><h3>People</h3><table class="table" id="debt-people"></table></article>
+      <article class="panel"><h3 id="debt-history-title">History</h3><div id="debt-history" class="muted">Select a person.</div></article>
+    </div>
+  </section>
+</main>
+
+<dialog id="edit-dialog">
+  <form method="dialog" id="edit-form">
+    <h3>Edit transaction</h3>
+    <p id="edit-summary" class="muted"></p>
+    <label>Type <select id="e-type">
+      <option value="expense">Expense</option><option value="income">Income</option><option value="transfer">Transfer</option>
+      <option value="refund">Refund</option><option value="cash_withdrawal">Cash withdrawal</option><option value="other">Other</option>
+    </select></label>
+    <label>Category <select id="e-category"></select></label>
+    <label>Subcategory <select id="e-subcategory"></select></label>
+    <label>Description <input id="e-description" maxlength="500"></label>
+    <label class="check"><input type="checkbox" id="e-remember"> Always use this category for this merchant</label>
+    <menu>
+      <button value="cancel" class="btn ghost">Cancel</button>
+      <button id="e-reclassify" type="button" class="btn">🤖 Ask AI again</button>
+      <button id="e-save" value="default" class="btn primary">Save</button>
+    </menu>
+  </form>
+</dialog>
+</body>
+</html>

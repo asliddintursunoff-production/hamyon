@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Finance Login</title>
+  <link rel="stylesheet" href="/static/css/app.css">
+</head>
+<body class="login-body">
+  <main class="login-card">
+    <h1>💰 Personal Finance</h1>
+    {% if error %}<p class="error">{{ error }}</p>{% endif %}
+    {% if request.query_params.get('expired') %}<p class="error">That login link is invalid or expired.</p>{% endif %}
+    <form method="post" action="/login">
+      <label for="password">Access code</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" required autofocus>
+      <button type="submit" class="btn primary">Sign in</button>
+    </form>
+    <p class="muted">Same code as the Telegram bot.</p>
+  </main>
+</body>
+</html>
