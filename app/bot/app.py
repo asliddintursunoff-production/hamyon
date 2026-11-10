@@ -46,7 +46,7 @@ class BotService:
         self.dp = build_dispatcher(ctx)
         self._task: asyncio.Task | None = None
         self._tasks: list[asyncio.Task] = []
-        self._menu_url: str | None = None
+        self._menu_url: str | None = "unset"  # forces the first update, even to "no URL"
         self._pending_questions: set[asyncio.Task] = set()
 
     async def start(self) -> None:
