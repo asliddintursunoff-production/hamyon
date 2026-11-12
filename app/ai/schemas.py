@@ -11,7 +11,7 @@ from app.utils.money import AmountParseError, to_decimal
 
 TxTypeLiteral = Literal["income", "expense", "transfer", "refund", "cash_withdrawal", "other"]
 DirectionLiteral = Literal["i_owe_them", "they_owe_me"]
-IntentLiteral = Literal["create_debt", "repay_debt", "add_expense", "add_income", "unknown"]
+IntentLiteral = Literal["create_debt", "repay_debt", "add_expense", "add_income", "multiple", "unknown"]
 
 
 def _clean_str(v, max_len: int):
@@ -104,6 +104,22 @@ class AssistantIntent(BaseModel):
     needs_confirmation: bool = False
     clarification_question: str | None = None
     transcript: str | None = None  # set when the input was a voice note
+    # Several operations in one message ("A, B and C each owe me 4000"): intent "multiple" + this list.
+    operations: list["AssistantIntent"] = Field(default_factory=list, max_length=10)
+
+    def all_operations(self) -> list["AssistantIntent"]:
+        ops = [op for op in self.operations if op.intent not in ("multiple", "unknown")]
+        return ops or [self]
+
+    @field_validator("operations", mode="before")
+    @classmethod
+    def _ops(cls, v):
+        return [] if v in (None, "", "null") else v
+
+    @field_validator("confidence", mode="before")
+    @classmethod
+    def _conf(cls, v):
+        return 0.5 if v in (None, "", "null") else v
 
     @field_validator("amount", mode="before")
     @classmethod
@@ -142,6 +158,9 @@ class AssistantIntent(BaseModel):
         if v in ("", "null", "unknown", None):
             return None
         return v
+
+
+AssistantIntent.model_rebuild()
 
 
 class Transcription(BaseModel):

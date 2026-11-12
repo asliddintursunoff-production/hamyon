@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import BigInteger, CheckConstraint, Index, String
+from sqlalchemy import BigInteger, CheckConstraint, Index, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -60,3 +60,20 @@ class PendingAction(TimestampMixin, Base):
     source: Mapped[str] = mapped_column(String(16), nullable=False)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
     expires_at: Mapped[datetime] = mapped_column(nullable=False)
+
+
+class AssistantMessage(CreatedAtMixin, Base):
+    """A bot reply to the owner's text/voice: what the owner said and what was saved, so that replying to it
+    can complete or correct it ("suzma is groceries", "4000 sum")."""
+
+    __tablename__ = "assistant_messages"
+    __table_args__ = (UniqueConstraint("chat_id", "message_id", name="uq_assistant_messages_chat_message"),)
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    chat_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    message_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    user_text: Mapped[str | None] = mapped_column(Text)
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)  # saved | confirm | clarify | unknown | error
+    undo_kind: Mapped[str | None] = mapped_column(String(16))
+    undo_ref: Mapped[str | None] = mapped_column(String(128))
+    transaction_id: Mapped[int | None] = mapped_column(BigInteger)  # a bank payment that was explained

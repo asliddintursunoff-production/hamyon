@@ -26,9 +26,13 @@ class Settings(BaseSettings):
 
     gemini_api_key: SecretStr | None = None
     # Each model has its own free-tier quota. Owner's text/voice try these in order:
-    gemini_model: str = "gemini-flash-lite-latest"  # fast (<1s), handles Uzbek text and voice
-    gemini_fallback_models: list[str] = ["gemini-2.5-flash", "gemini-flash-latest"]
-    gemini_background_models: list[str] = ["gemini-flash-lite-latest", "gemini-2.5-flash"]
+    # Newest light model: ~1 s, good Uzbek, ~500 free requests/day. Every fallback has its own free quota.
+    gemini_model: str = "gemini-3.5-flash-lite"
+    gemini_fallback_models: list[str] = [
+        "gemini-3.1-flash-lite", "gemini-flash-lite-latest", "gemini-3-flash-preview", "gemini-2.5-flash",
+    ]
+    # Bank-message classification uses other models, so it never eats the owner's quota.
+    gemini_background_models: list[str] = ["gemini-3.1-flash-lite", "gemini-flash-lite-latest", "gemini-2.5-flash"]
     # Background classification may use at most this many requests per day, so the owner's
     # text/voice messages always have free quota left.
     ai_background_daily_budget: int = 300

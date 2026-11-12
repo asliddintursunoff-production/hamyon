@@ -7,6 +7,7 @@ Voice messages are transcribed first and then go through exactly the same functi
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from decimal import Decimal
@@ -148,11 +149,14 @@ class Assistant:
 
     # ------------------------------------------------------------------ entry points
     async def handle_voice(self, audio: bytes, mime_type: str, *, idempotency_key: str, tz: ZoneInfo,
-                           now: datetime | None = None) -> tuple[str | None, AssistantReply]:
-        """One AI request transcribes AND understands the voice note, then the same validation as text."""
+                           now: datetime | None = None, context: str | None = None,
+                           replace: list | None = None) -> tuple[str | None, AssistantReply]:
+        """One AI request transcribes AND understands the voice note, then the same validation as text.
+
+        context: the earlier message this one replies to; replace: records it saved, replaced on success."""
         now = now or utcnow()
         try:
-            intent, raw = await parse_intent_voice(self.ai, audio, mime_type, now, tz)
+            intent, raw = await parse_intent_voice(self.ai, audio, mime_type, now, tz, context)
         except AIQuotaExhausted as exc:
             await self._log("voice", "error", None, str(exc))
             return None, AssistantReply("error", f"⚠️ {_quota_text(exc)} Please type the message instead — I can still understand typed text.")
@@ -161,38 +165,73 @@ class Assistant:
             return None, AssistantReply("error", "⚠️ I couldn't understand the voice message right now. Please try again or type it.")
         await self._log("voice", "ok", raw, None)
         transcript = (intent.transcript or "").strip()
-        reply = await self._validate_and_route(intent, transcript, TxSource.BOT_VOICE, idempotency_key, tz, now)
+        check_text = f"{context or ''}\n{transcript}"
+        reply = await self._route(intent, check_text, TxSource.BOT_VOICE, idempotency_key, tz, now, replace)
         return transcript or None, reply
 
     async def handle_text(self, text: str, *, source: TxSource, idempotency_key: str, tz: ZoneInfo,
-                          now: datetime | None = None) -> AssistantReply:
+                          now: datetime | None = None, context: str | None = None,
+                          replace: list | None = None) -> AssistantReply:
         now = now or utcnow()
         text = (text or "").strip()[:1000]
         if not text:
             return AssistantReply("unknown", HELP_TEXT)
+        check_text = f"{context or ''}\n{text}"
         try:
-            intent, raw = await parse_intent(self.ai, text, now, tz)
+            intent, raw = await parse_intent(self.ai, text, now, tz, context)
         except (AIUnavailable, AIInvalidResponse) as exc:
             await self._log("assistant", "error", getattr(exc, "raw", None), str(exc))
-            offline = parse_offline(text)
+            offline = parse_offline(f"{context}. {text}" if context else text)
             if offline is None:
                 why = _quota_text(exc) if isinstance(exc, AIQuotaExhausted) else "The AI assistant is unavailable right now."
                 return AssistantReply("error", f"⚠️ {why} I couldn't understand this without it, nothing was saved.\n\n" + HELP_TEXT)
-            reply = await self._validate_and_route(offline, text, source, idempotency_key, tz, now)
+            reply = await self._route(offline, check_text, source, idempotency_key, tz, now, replace)
             reply.text = "🧩 <i>Understood without AI — please check.</i>\n" + reply.text
             return reply
         await self._log("assistant", "ok", raw, None)
-        return await self._validate_and_route(intent, text, source, idempotency_key, tz, now)
+        return await self._route(intent, check_text, source, idempotency_key, tz, now, replace)
 
     # ------------------------------------------------------------------ validation
-    async def _validate_and_route(self, intent: AssistantIntent, text: str, source: TxSource,
-                                  key: str, tz: ZoneInfo, now: datetime) -> AssistantReply:
-        if intent.intent == "unknown":
-            return AssistantReply("unknown", "🤔 I didn't recognise a financial operation.\n\n" + HELP_TEXT)
+    async def _route(self, intent: AssistantIntent, text: str, source: TxSource, key: str, tz: ZoneInfo,
+                     now: datetime, replace: list | None) -> AssistantReply:
+        ops = intent.all_operations()
+        if len(ops) == 1:
+            return await self._validate_and_route(ops[0], text, source, key, tz, now, replace)
+        # Several operations: all are saved together (or confirmed together) with one undo.
+        payloads, reasons = [], []
+        for op in ops:
+            prepared = self._prepare(op, text, source, tz, now)
+            if isinstance(prepared, AssistantReply):
+                who = f" ({escape_html(op.person_name)})" if op.person_name else ""
+                prepared.text = prepared.text.replace("❔", f"❔{who}", 1)
+                return prepared
+            payload, why = prepared
+            if payload["intent"] in ("create_debt", "repay_debt") and not payload.get("direction"):
+                return AssistantReply("clarify", f"{describe(payload)}\n\n❔ Who owes whom?\n"
+                                                 "<i>Reply to this message and say it clearly.</i>")
+            payloads.append(payload)
+            reasons += [r for r in why if r not in reasons]
+        batch = {"intent": "batch", "ops": payloads, "replace": replace or []}
+        if reasons:
+            pending = await self._create_pending(batch, source)
+            body = "\n".join(describe(p) for p in payloads)
+            return AssistantReply("confirm", f"{body}\n\n<i>Please confirm: {escape_html('; '.join(reasons))}.</i>",
+                                  pending_id=pending)
+        try:
+            async with self.sf.begin() as s:
+                return await self._execute(s, batch, source, key, tz)
+        except DebtError as exc:  # all or nothing: one failed operation rolls back the others
+            return AssistantReply("error", f"⚠️ {escape_html(str(exc))}. Nothing was saved.")
 
+    def _prepare(self, intent: AssistantIntent, text: str, source: TxSource, tz: ZoneInfo,
+                 now: datetime) -> AssistantReply | tuple[dict, list[str]]:
+        """Deterministic checks of one AI-extracted operation -> (payload, reasons to confirm) or a reply."""
+        if intent.intent in ("unknown", "multiple"):
+            return AssistantReply("unknown", "🤔 I didn't recognise a financial operation.\n\n" + HELP_TEXT)
         if intent.amount is None or intent.amount <= 0 or intent.amount > MAX_AMOUNT:
             q = intent.clarification_question or "What is the amount?"
-            return AssistantReply("clarify", f"❔ I couldn't determine the amount. {escape_html(q)}\nPlease resend the full message with the amount.")
+            return AssistantReply("clarify", f"❔ I couldn't determine the amount. {escape_html(q)}\n"
+                                             "<i>Reply to this message with the amount.</i>")
         amount = to_decimal(intent.amount)
         currency = (intent.currency or self.settings.currency).upper()
 
@@ -206,12 +245,20 @@ class Assistant:
             reasons.append("unusual date")
             when = now if when > now + timedelta(days=1) else when
         if intent.intent in ("create_debt", "repay_debt") and not intent.person_name:
-            return AssistantReply("clarify", "❔ Who is this debt with? Please resend the message with the person's name.")
+            return AssistantReply("clarify", "❔ Who is this debt with?\n<i>Reply to this message with the person's name.</i>")
         threshold = VOICE_CONFIDENCE if source == TxSource.BOT_VOICE else self.settings.ai_confidence_threshold
         if intent.needs_confirmation or intent.confidence < threshold:
             reasons.append("I'm not fully sure I understood")
+        return _payload_from_intent(intent, amount, currency, when), reasons
 
-        payload = _payload_from_intent(intent, amount, currency, when)
+    async def _validate_and_route(self, intent: AssistantIntent, text: str, source: TxSource,
+                                  key: str, tz: ZoneInfo, now: datetime, replace: list | None = None) -> AssistantReply:
+        prepared = self._prepare(intent, text, source, tz, now)
+        if isinstance(prepared, AssistantReply):
+            return prepared
+        payload, reasons = prepared
+        if replace:
+            payload["replace"] = replace
 
         if intent.intent in ("create_debt", "repay_debt") and intent.direction is None:
             pending = await self._create_pending(payload, source)
@@ -276,7 +323,35 @@ class Assistant:
 
     # ------------------------------------------------------------------ execution
     async def _execute(self, s, payload: dict, source: TxSource, key: str, tz: ZoneInfo) -> AssistantReply:
+        replaced = await self._replace_old(s, payload.get("replace") or [])
+        reply = await self._execute_one(s, payload, source, key, tz)
+        if replaced and reply.kind == "saved":
+            reply.text = "✏️ <b>Corrected</b> — the previous record was replaced.\n" + reply.text
+        return reply
+
+    async def _replace_old(self, s, refs: list) -> bool:
+        """Undo what an earlier (wrong) message saved, in the same DB transaction as the correction."""
+        done = False
+        for kind, ref in refs:
+            try:
+                async with s.begin_nested():
+                    done = await self._undo_in(s, kind, ref) or done
+            except (DebtError, TransactionNotFound, SplitError, ValueError):
+                pass  # already undone by hand
+        return done
+
+    async def _execute_one(self, s, payload: dict, source: TxSource, key: str, tz: ZoneInfo) -> AssistantReply:
         intent = payload["intent"]
+        if intent == "batch":
+            replies = []
+            for i, op in enumerate(payload["ops"]):
+                replies.append(await self._execute_one(s, op, source, key if i == 0 else f"{key}#{i}", tz))
+            failed = [r for r in replies if r.kind != "saved"]
+            if failed:  # all or nothing
+                raise DebtError(re.sub("<[^>]+>", "", failed[0].text).replace("⚠️", "").strip()[:200])
+            parts = [r.text.split("\n\n")[0].split("\n", 1)[-1] for r in replies]
+            return AssistantReply("saved", f"✅ Saved {len(replies)} operations\n" + "\n".join(parts),
+                                  undo=("batch", key))
         if intent == "explain":
             return await self._apply_explanation(s, payload, source, key)
         amount = Decimal(payload["amount"])
@@ -352,30 +427,59 @@ class Assistant:
     async def undo(self, kind: str, ref: str) -> str:
         async with self.sf.begin() as s:
             try:
-                if kind == "debt":
-                    await cancel_debt(s, int(ref), reason="undo from bot", actor="owner:bot")
-                elif kind == "tx":
-                    await soft_delete_transaction(s, int(ref), actor="owner:bot", reason="undo from bot")
-                elif kind == "explain":
-                    await undo_explanation(s, int(ref), actor="owner:bot")
-                elif kind == "repayment":
-                    payments = (await s.scalars(select(DebtPayment).where(DebtPayment.idempotency_key == ref))).all()
-                    excess = (await s.scalars(select(Debt).where(Debt.idempotency_key == f"{ref}:excess"))).first()
-                    if not payments and not excess:
-                        return "Nothing to undo."
-                    for p in payments:
-                        await cancel_payment(s, p.id, reason="undo from bot", actor="owner:bot")
-                    if excess:
-                        await cancel_debt(s, excess.id, reason="undo from bot", actor="owner:bot")
-                    spent = (await s.scalars(select(Transaction).where(
-                        Transaction.idempotency_key.like(f"{ref}:p%"), Transaction.deleted_at.is_(None)))).all()
-                    for t in spent:
-                        await soft_delete_transaction(s, t.id, actor="owner:bot", reason="repayment undone")
-                else:
-                    return "Unknown item."
+                if not await self._undo_in(s, kind, ref):
+                    return "Nothing to undo."
             except (DebtError, TransactionNotFound, SplitError, ValueError) as exc:
                 return f"Could not undo: {escape_html(str(exc))}"
         return "↩️ Undone (kept in the audit history)."
+
+    async def _undo_in(self, s, kind: str, ref: str) -> bool:
+        if kind == "debt":
+            await cancel_debt(s, int(ref), reason="undo from bot", actor="owner:bot")
+        elif kind == "tx":
+            await soft_delete_transaction(s, int(ref), actor="owner:bot", reason="undo from bot")
+        elif kind == "explain":
+            await undo_explanation(s, int(ref), actor="owner:bot")
+        elif kind == "repayment":
+            return await self._undo_repayment(s, ref)
+        elif kind == "batch":  # everything saved by one multi-operation message
+            done = False
+            for k in [ref] + [f"{ref}#{i}" for i in range(1, 11)]:
+                done = await self._undo_key(s, k) or done
+            return done
+        else:
+            raise ValueError("unknown item")
+        return True
+
+    async def _undo_key(self, s, key: str) -> bool:
+        done = False
+        debt = (await s.scalars(select(Debt).where(Debt.idempotency_key == key, Debt.status != "cancelled"))).first()
+        if debt:
+            await cancel_debt(s, debt.id, reason="undo from bot", actor="owner:bot")
+            done = True
+        tx = (await s.scalars(select(Transaction).where(Transaction.idempotency_key == key,
+                                                         Transaction.deleted_at.is_(None)))).first()
+        if tx:
+            await soft_delete_transaction(s, tx.id, actor="owner:bot", reason="undo from bot")
+            done = True
+        return await self._undo_repayment(s, key) or done
+
+    async def _undo_repayment(self, s, ref: str) -> bool:
+        payments = (await s.scalars(select(DebtPayment).where(DebtPayment.idempotency_key == ref,
+                                                              DebtPayment.cancelled_at.is_(None)))).all()
+        excess = (await s.scalars(select(Debt).where(Debt.idempotency_key == f"{ref}:excess",
+                                                     Debt.status != "cancelled"))).first()
+        if not payments and not excess:
+            return False
+        for p in payments:
+            await cancel_payment(s, p.id, reason="undo from bot", actor="owner:bot")
+        if excess:
+            await cancel_debt(s, excess.id, reason="undo from bot", actor="owner:bot")
+        spent = (await s.scalars(select(Transaction).where(
+            Transaction.idempotency_key.like(f"{ref}:p%"), Transaction.deleted_at.is_(None)))).all()
+        for t in spent:
+            await soft_delete_transaction(s, t.id, actor="owner:bot", reason="repayment undone")
+        return True
 
     # ------------------------------------------------------------------ "what was this money for?"
     async def _explain_context(self, s, tx: Transaction, tz: ZoneInfo) -> tuple[str, str, str]:
@@ -393,7 +497,8 @@ class Assistant:
         return facts, await categories_prompt_text(s), people
 
     async def explain_transaction(self, tx_id: int, *, text: str | None = None, audio: tuple[bytes, str] | None = None,
-                                  source: TxSource, idempotency_key: str, tz: ZoneInfo) -> tuple[str | None, AssistantReply]:
+                                  source: TxSource, idempotency_key: str, tz: ZoneInfo,
+                                  context: str | None = None) -> tuple[str | None, AssistantReply]:
         """The owner's reply to "what was this for?" — text or voice, possibly several parts and debts."""
         async with self.sf() as s:
             tx = await s.get(Transaction, tx_id)
@@ -402,7 +507,8 @@ class Assistant:
             facts, cats, people = await self._explain_context(s, tx, tz)
         try:
             answer, raw = await parse_split(self.ai, tx_facts=facts, categories=cats, people=people,
-                                            text=(text or "")[:1000] if audio is None else None, audio=audio)
+                                            text=(text or "")[:1000] if audio is None else None, audio=audio,
+                                            context=context)
         except AIQuotaExhausted as exc:
             await self._log("explain", "error", None, str(exc))
             return None, AssistantReply("error", f"⚠️ {_quota_text(exc)} Reply again later — the payment stays as it is.")
@@ -419,7 +525,7 @@ class Assistant:
             return heard or None, AssistantReply("error", f"⚠️ {escape_html(str(exc))}. Nothing was changed — reply again to this question.{q}")
 
         # Stated amounts must really appear in what the owner said.
-        mentioned = candidate_amounts(heard)
+        mentioned = candidate_amounts(f"{context or ''}\n{heard}")
         if any(ln.stated and not ln.estimated and ln.amount not in mentioned for ln in lines) and len(lines) > 1:
             problems.append("please check the amounts")
         async with self.sf() as s:

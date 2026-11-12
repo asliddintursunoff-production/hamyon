@@ -10,7 +10,7 @@ from app.models.finance import (
     TransactionQuestion,
     TransactionSplit,
 )
-from app.models.system import AuditLog, BotAuthSession, DashboardLoginToken, PendingAction
+from app.models.system import AssistantMessage, AuditLog, BotAuthSession, DashboardLoginToken, PendingAction
 
 __all__ = [
     "Base",
@@ -28,6 +28,7 @@ __all__ = [
     "Person",
     "Debt",
     "DebtPayment",
+    "AssistantMessage",
     "AuditLog",
     "BotAuthSession",
     "DashboardLoginToken",
