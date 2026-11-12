@@ -35,6 +35,7 @@ async def load_tx(sf: SessionFactory, tx_id: int) -> Transaction | None:
             await s.scalars(
                 select(Transaction)
                 .options(
+                    selectinload(Transaction.category), selectinload(Transaction.subcategory), selectinload(Transaction.item),
                     selectinload(Transaction.splits).selectinload(TransactionSplit.category),
                     selectinload(Transaction.splits).selectinload(TransactionSplit.subcategory),
                     selectinload(Transaction.splits).selectinload(TransactionSplit.item),
@@ -51,7 +52,12 @@ def head(tx: Transaction) -> str:
 
 
 def question_text(tx: Transaction) -> str:
-    return f"❓ <b>{head(tx)}</b>"
+    text = f"❓ <b>{head(tx)}</b>"
+    cat = tx.category.name if tx.category else None
+    if cat and cat != "Other" and tx.direction == TxDirection.OUT and tx.transaction_type == "expense":
+        guess = " › ".join(c.name for c in (tx.category, tx.subcategory, tx.item) if c)
+        text += f"\n<i>{escape_html(guess)}?</i>  ✖️ keeps it"
+    return text
 
 
 def _label(sp: TransactionSplit, direction: str) -> str:

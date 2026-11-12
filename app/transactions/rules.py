@@ -1,6 +1,7 @@
 """Merchant memory: avoid AI calls for merchants we already know, and honour owner corrections."""
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import Decimal
@@ -20,6 +21,23 @@ P2P_MARKERS = (
 OWN_ACCOUNT_MARKERS = ("KONVERSIYA", "KONVERTATSIYA", "CONVERSION", "NA KOSHELEK", "KOSHELEK", "HAMYON")
 
 
+# Payment gateways / QR acquiring: the name says nothing about WHAT was bought (MUNIS can be a canteen,
+# a utility bill or a shop). Never trust a guessed rule for them, and always ask the owner.
+# A name is "generic" when it has a gateway marker and nothing else meaningful ("OOO WB TAXI OPLATA" is not).
+GENERIC_PAYMENT_MARKERS = {"MUNIS", "OPLATA", "QR", "EKVAYRING", "EKVAIRING", "ACQUIRING", "PAYNET"}
+_GATEWAY_WORDS = GENERIC_PAYMENT_MARKERS | {
+    "CLICK", "PAYME", "UZUM", "AAB", "AO", "OOO", "MCHJ", "ONLINE", "TEZ", "PO", "REK", "REKV", "REKVIZITAM",
+}
+
+
+def looks_like_generic_payment(merchant: str | None) -> bool:
+    m = normalize_merchant(merchant or "")
+    if not m or looks_like_p2p(m):
+        return False
+    words = re.findall(r"[A-Z0-9']+", m.split(">", 1)[0])  # text after ">" is the city
+    return bool(words) and any(w in GENERIC_PAYMENT_MARKERS for w in words) and all(w in _GATEWAY_WORDS for w in words)
+
+
 def looks_like_own_account(merchant: str | None) -> bool:
     m = normalize_merchant(merchant or "")
     return any(marker in m for marker in OWN_ACCOUNT_MARKERS)
@@ -36,7 +54,14 @@ class RuleDecision:
     merchant: Merchant | None
 
 
-def decide(merchant: Merchant | None, now: datetime, negative_cache_days: int, min_confidence: float) -> RuleDecision:
+def decide(
+    merchant: Merchant | None, now: datetime, negative_cache_days: int, min_confidence: float, *, generic: bool = False
+) -> RuleDecision:
+    if generic:
+        # Only the owner's own default counts; an AI guess from the gateway name would be wrong.
+        if merchant is not None and merchant.confirmed and merchant.category_id:
+            return RuleDecision("use_rule", merchant)
+        return RuleDecision("known_unknown", merchant)
     if merchant is None:
         return RuleDecision("ask_ai", None)
     if merchant.confirmed and merchant.category_id:

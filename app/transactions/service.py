@@ -212,6 +212,7 @@ class Classification:
     confidence: Decimal | None
     needs_review: bool
     status: ClassificationStatus
+    item: Category | None = None
 
 
 async def apply_classification(session: AsyncSession, tx_id: int, c: Classification) -> bool:
@@ -230,6 +231,7 @@ async def apply_classification(session: AsyncSession, tx_id: int, c: Classificat
             needs_review=c.needs_review,
             classification_status=c.status,
             updated_at=utcnow(),
+            **({"item_id": c.item.id} if c.item is not None else {}),
         )
     )
     return res.rowcount == 1

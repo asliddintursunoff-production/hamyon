@@ -32,7 +32,7 @@ from app.transactions.parser import (
     parse_balance_list,
     parse_transaction,
 )
-from app.transactions.rules import decide, find_merchant, remember_ai_result
+from app.transactions.rules import decide, find_merchant, looks_like_generic_payment, remember_ai_result
 from app.transactions.service import Classification, apply_classification, create_humo_transaction
 from app.utils.timeutil import utcnow
 
@@ -275,12 +275,14 @@ class MessageProcessor:
         async with self.sf.begin() as s:
             merchant = await find_merchant(s, parsed.merchant, parsed.direction)
             decision = decide(
-                merchant, utcnow(), self.settings.merchant_negative_cache_days, self.settings.ai_confidence_threshold
+                merchant, utcnow(), self.settings.merchant_negative_cache_days, self.settings.ai_confidence_threshold,
+                generic=parsed.direction == "out" and looks_like_generic_payment(parsed.merchant),
             )
             if decision.kind == "use_rule":
                 m = decision.merchant
                 cat = await s.get(Category, m.category_id)
                 sub = await s.get(Category, m.subcategory_id) if m.subcategory_id else None
+                item = await s.get(Category, m.item_id) if m.item_id else None
                 tx_type = m.transaction_type or tx.transaction_type
                 await apply_classification(
                     s, tx_id,
@@ -288,7 +290,7 @@ class MessageProcessor:
                         transaction_type=tx_type, category=cat, subcategory=sub,
                         is_spending=m.is_spending if m.is_spending is not None else tx_type == TxType.EXPENSE,
                         description=m.description, confidence=m.ai_confidence if not m.confirmed else Decimal("1"),
-                        needs_review=False, status=ClassificationStatus.RULE,
+                        needs_review=False, status=ClassificationStatus.RULE, item=item,
                     ),
                 )
                 await s.execute(

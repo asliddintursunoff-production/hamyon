@@ -7,7 +7,8 @@ from sqlalchemy.orm import selectinload
 
 from app.database.session import SessionFactory
 from app.models import Transaction, TransactionQuestion
-from app.models.enums import TxType
+from app.models.enums import TxDirection, TxType
+from app.transactions.rules import looks_like_generic_payment
 from app.utils.timeutil import utcnow
 
 
@@ -19,6 +20,8 @@ def is_unclear(tx: Transaction) -> bool:
     sub = tx.subcategory.name if tx.subcategory else None
     if tx.transaction_type == TxType.TRANSFER:
         return sub == "Sent to Others"
+    if tx.direction == TxDirection.OUT and looks_like_generic_payment(tx.merchant):
+        return True  # MUNIS / QR / OPLATA: the name doesn't tell what it was, even with a default guess
     return cat in (None, "Other")
 
 
@@ -27,7 +30,10 @@ async def load_for_question(sf: SessionFactory, tx_id: int) -> Transaction | Non
         tx = (
             await s.scalars(
                 select(Transaction)
-                .options(selectinload(Transaction.category), selectinload(Transaction.subcategory), selectinload(Transaction.card))
+                .options(
+                    selectinload(Transaction.category), selectinload(Transaction.subcategory),
+                    selectinload(Transaction.item), selectinload(Transaction.card),
+                )
                 .where(Transaction.id == tx_id)
             )
         ).first()

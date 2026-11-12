@@ -67,6 +67,7 @@ class Merchant(TimestampMixin, Base):
     display_name: Mapped[str] = mapped_column(String(255), nullable=False)
     category_id: Mapped[int | None] = mapped_column(ForeignKey("categories.id", ondelete="SET NULL"))
     subcategory_id: Mapped[int | None] = mapped_column(ForeignKey("categories.id", ondelete="SET NULL"))
+    item_id: Mapped[int | None] = mapped_column(ForeignKey("categories.id", ondelete="SET NULL"))
     transaction_type: Mapped[str | None] = mapped_column(String(20))
     is_spending: Mapped[bool | None] = mapped_column(Boolean)
     description: Mapped[str | None] = mapped_column(String(255))
